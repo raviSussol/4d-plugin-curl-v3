@@ -1,0 +1,80 @@
+# THROWAWAY: build-only CI for testing changes on a fork.
+#
+# Builds both platforms with no secrets and no signing/notarization, and
+# uploads the two binaries as artifacts. This exists so changes can be
+# compiled for Windows without a Windows machine.
+#
+# Delete this file before opening a PR against miyako/4d-plugin-curl-v3.
+
+name: CI build
+
+on:
+  push:
+    branches:
+      - fix-windows-dns
+  workflow_dispatch:
+
+concurrency:
+  group: ci-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_NAME: cURL
+  XCODE_PROJECT: cURL.xcodeproj
+  VCX_SOLUTION: cURL.sln
+  MACOS_DEPLOYMENT_TARGET: '10.13'
+
+jobs:
+
+  windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # Same overrides release.yml uses: windows-latest has the v143 toolset
+      # but not the v140 the project is pinned to, and no Windows 8.1 SDK.
+      - name: build x64
+        shell: cmd
+        run: msbuild "${{ env.VCX_SOLUTION }}" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
+
+      - name: upload .4DX
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-4DX
+          path: test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS (universal, unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build macOS plugin (universal)
+        run: |
+          xcodebuild -project "${{ env.XCODE_PROJECT }}" \
+            -target "${{ env.PRODUCT_NAME }}" \
+            -configuration Default \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MACOSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: verify universal binary
+        run: |
+          set -euo pipefail
+          BIN="test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q "arm64" && lipo -info "$BIN" | grep -q "x86_64"
+
+      - name: upload macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-macos
+          path: test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}
+          if-no-files-found: error
