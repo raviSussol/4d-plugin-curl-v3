@@ -1,0 +1,177 @@
+# Builds the Windows x64 static dependency set from vcpkg.json and uploads it
+# as an artifact. The .lib files are then committed into lib\64 by hand, in a
+# commit containing nothing but binaries - see build.md.
+#
+# workflow_dispatch only. This is slow and rare: run it when vcpkg.json or its
+# baseline changes, not on every push. The plugin itself is built by
+# ci-build.yml, which links whatever is already committed in lib\64.
+
+name: vcpkg deps (Windows x64)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: vcpkg-deps-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TRIPLET: x64-windows-static
+  VCPKG_DISABLE_METRICS: '1'
+
+jobs:
+  deps:
+    name: Build dependencies (${{ github.ref_name }})
+    runs-on: windows-latest
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The baseline lives in exactly one place - vcpkg.json - so this workflow
+      # cannot drift from the manifest it is building.
+      - name: read the baseline from vcpkg.json
+        id: manifest
+        shell: pwsh
+        run: |
+          $m = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+          $baseline = $m.'builtin-baseline'
+          if (-not $baseline) { throw "vcpkg.json has no builtin-baseline" }
+          if ($baseline -notmatch '^[0-9a-f]{40}$') { throw "builtin-baseline is not a commit sha: $baseline" }
+          "baseline=$baseline" >> $env:GITHUB_OUTPUT
+          Write-Host "baseline $baseline"
+          Write-Host ($m.dependencies | ConvertTo-Json -Depth 5)
+
+      # Keyed on the manifest and the baseline: a source-only change to the
+      # repo reuses the cache, a manifest change rebuilds. Without this every
+      # run pays the full OpenSSL + curl build.
+      - name: restore the vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-archives
+          key: vcpkg-${{ env.TRIPLET }}-${{ steps.manifest.outputs.baseline }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ env.TRIPLET }}-${{ steps.manifest.outputs.baseline }}-
+            vcpkg-${{ env.TRIPLET }}-
+
+      # Fetch the exact baseline commit rather than using the runner image's
+      # vcpkg, so the port versions do not move when the image is updated.
+      - name: fetch vcpkg at the baseline
+        shell: cmd
+        run: |
+          git init vcpkg-src || exit /b 1
+          cd vcpkg-src
+          git remote add origin https://github.com/microsoft/vcpkg.git || exit /b 1
+          git fetch --depth 1 origin ${{ steps.manifest.outputs.baseline }} || exit /b 1
+          git checkout FETCH_HEAD || exit /b 1
+          git --no-pager log -1 --format="vcpkg at %H %ci" || exit /b 1
+          call bootstrap-vcpkg.bat -disableMetrics || exit /b 1
+
+      - name: install
+        shell: cmd
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-archives
+        run: |
+          if not exist "%VCPKG_DEFAULT_BINARY_CACHE%" mkdir "%VCPKG_DEFAULT_BINARY_CACHE%"
+          vcpkg-src\vcpkg.exe install --triplet %TRIPLET% --x-install-root=vcpkg_installed --clean-after-build || exit /b 1
+
+      - name: record the resolved versions
+        shell: pwsh
+        run: |
+          $share = "vcpkg_installed\$env:TRIPLET\share"
+          $rows = @()
+          foreach ($d in Get-ChildItem $share -Directory) {
+            $spdx = Join-Path $d.FullName "vcpkg.spdx.json"
+            $version = "?"
+            if (Test-Path $spdx) {
+              $j = Get-Content $spdx -Raw | ConvertFrom-Json
+              $pkg = $j.packages | Where-Object { $_.name -eq $d.Name } | Select-Object -First 1
+              if ($pkg -and $pkg.versionInfo) { $version = $pkg.versionInfo }
+            }
+            $rows += [pscustomobject]@{ port = $d.Name; version = $version }
+          }
+          $rows = $rows | Sort-Object port
+          $text = "vcpkg baseline ${{ steps.manifest.outputs.baseline }}`ntriplet $env:TRIPLET`n`n"
+          $text += ($rows | ForEach-Object { "{0,-24} {1}" -f $_.port, $_.version }) -join "`n"
+          $text | Set-Content versions.txt -Encoding utf8
+          Get-Content versions.txt
+
+      # Every name the vcxproj's Release|x64 link line expects out of lib\64,
+      # minus cares.lib. Port output names do change - the dead Release|Win32
+      # line still refers to brotlidec-static.lib - so a rename must fail here
+      # loudly rather than produce a short artifact nobody checks.
+      - name: stage the libraries for lib\64
+        shell: pwsh
+        run: |
+          $expected = @(
+            'libcurl.lib',
+            'libcrypto.lib', 'libssl.lib',
+            'libssh2.lib',
+            'nghttp2.lib', 'nghttp3.lib', 'ngtcp2.lib', 'ngtcp2_crypto_ossl.lib',
+            'brotlicommon.lib', 'brotlidec.lib', 'brotlienc.lib',
+            'zstd.lib', 'zlib.lib',
+            'iconv.lib', 'charset.lib',
+            'idn2.lib', 'unistring.lib',
+            'libproxy.lib', 'modman.lib'
+          )
+          $src = "vcpkg_installed\$env:TRIPLET\lib"
+          New-Item -ItemType Directory -Force lib64-out | Out-Null
+          $missing = @()
+          foreach ($f in $expected) {
+            $p = Join-Path $src $f
+            if (Test-Path $p) { Copy-Item $p lib64-out }
+            else { $missing += $f }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::$($missing.Count) expected library/libraries not produced: $($missing -join ', ')"
+            Write-Host "--- everything installed in $src ---"
+            Get-ChildItem $src -Filter *.lib | Sort-Object Name |
+              ForEach-Object { "  {0,-34} {1,12:N0}" -f $_.Name, $_.Length }
+            exit 1
+          }
+          Write-Host "staged $($expected.Count) libraries:"
+          Get-ChildItem lib64-out | Sort-Object Name |
+            ForEach-Object { "  {0,-34} {1,12:N0}" -f $_.Name, $_.Length }
+          # cares.lib is deliberately absent - it is deleted from lib\64 in the
+          # same commit that lands these.
+          if (Test-Path (Join-Path $src 'cares.lib')) {
+            Write-Host "::error::cares.lib was built - the curl c-ares feature has crept back into vcpkg.json"
+            exit 1
+          }
+
+      # Gate the artifact on the probe: assert the parity and the absence of
+      # c-ares against the libraries we just built, before anyone commits them.
+      #
+      # The system libraries here deliberately mirror the vcxproj's Release|x64
+      # link line exactly, so that a newly required one (OpenSSL picking up a
+      # dependency on bcrypt, say) fails here and in the msbuild step together
+      # rather than passing one and breaking the other.
+      - name: build and run the acceptance probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DCURL_STATICLIB /DNGHTTP2_STATICLIB /I include ^
+            .github\probe\curl-probe.c /Fe:probe.exe ^
+            /link /LIBPATH:lib64-out ^
+            libcurl.lib libssh2.lib libssl.lib libcrypto.lib ^
+            nghttp2.lib nghttp3.lib ngtcp2.lib ngtcp2_crypto_ossl.lib ^
+            brotlicommon.lib brotlidec.lib brotlienc.lib zstd.lib zlib.lib ^
+            iconv.lib charset.lib idn2.lib unistring.lib ^
+            libproxy.lib modman.lib ^
+            Secur32.lib Wldap32.lib Crypt32.lib ws2_32.lib ^
+            legacy_stdio_definitions.lib kernel32.lib user32.lib gdi32.lib ^
+            winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib ^
+            oleaut32.lib uuid.lib odbc32.lib odbccp32.lib || exit /b 1
+          probe.exe || exit /b 1
+
+      # lib64-out holds nothing but the files destined for lib\64, so the
+      # binary commit is a straight copy. versions.txt stays outside it - it
+      # belongs in the commit message, not in lib\64.
+      - name: upload the libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib64-${{ env.TRIPLET }}
+          path: |
+            lib64-out
+            versions.txt
+          if-no-files-found: error
