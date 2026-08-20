@@ -281,6 +281,10 @@ $status:=cURL($options; $request; $response; "TEST_PROGRESS")
 
 `PINNEDPUBLICKEY` / `PROXY_PINNEDPUBLICKEY` — Text. Either a `sha256//<base64-hash>` pin string (passed straight through) or a platform-native file path (converted internally on macOS).
 
+> **`DNS_SERVERS`, `DNS_INTERFACE`, `DNS_LOCAL_IP4` and `DNS_LOCAL_IP6` are ignored on Windows.** libcurl only implements these four when it is built against c-ares, and the Windows build no longer is — it uses the OS resolver instead, so that names resolve the way they do for every other program on the machine. Setting them is harmless: libcurl rejects the option, the plugin does not treat that as an error, and the transfer proceeds using the system's own DNS configuration. The macOS build still links c-ares, so all four continue to work there.
+
+
+
 ### Path options (platform-native path, converted internally on macOS)
 
 `SSLCERT`, `COOKIEFILE`, `CAINFO`, `COOKIEJAR`, `SSLKEY`, `CAPATH`, `NETRC_FILE`, `SSH_PUBLIC_KEYFILE`, `SSH_PRIVATE_KEYFILE`, `CRLFILE`, `ISSUERCERT`, `PROXY_CAINFO`, `PROXY_CAPATH`, `PROXY_SSLCERT`, `PROXY_SSLKEY`, `PROXY_CRLFILE`. All Text, holding a platform path (use `.platformPath`, not `.path`).
