@@ -1,0 +1,35 @@
+{
+  "name": "4d-plugin-curl",
+  "version-string": "0.0.0",
+  "description": "Windows x64 dependency set for the 4D cURL plugin. Produces the static libraries committed to lib\\64.",
+  "$comment-libs": "libproxy and libiconv are not curl dependencies. The plugin includes proxy.h and iconv.h directly: libproxy backs the AUTOPROXY option, libiconv the FTP encoding conversion. libunistring reaches the link line only as a dependency of libidn2.",
+  "$comment-openssl": "The override is redundant at the baseline below, which already carries 3.6.3. It is kept as an explicit floor so a baseline bump cannot move OpenSSL without someone editing this line. OpenSSL 3.6 is end-of-life on 2026-11-01 - see build.md.",
+  "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
+  "dependencies": [
+    {
+      "$comment": "Feature list derived from cURL_VersionInfo on the shipping build, not guessed. default-features is false on purpose: curl's defaults are [non-http, ssl], and 'ssl' resolves to Schannel on Windows unless http3 is also set. The shipping build reports a bare OpenSSL ssl_version with MULTI_SSL clear, so Schannel is not in it and must not be added. Omitting the defaults also keeps websockets, psl, gsasl, httpsrr and c-ares out, matching the build this replaces in every case except c-ares, which is removed deliberately - see build.md.",
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "brotli",
+        "http2",
+        "http3",
+        "idn2",
+        "ldap",
+        "non-http",
+        "openssl",
+        "ssh",
+        "sspi",
+        "zstd"
+      ]
+    },
+    "libiconv",
+    "libproxy"
+  ],
+  "overrides": [
+    {
+      "name": "openssl",
+      "version": "3.6.3"
+    }
+  ]
+}
