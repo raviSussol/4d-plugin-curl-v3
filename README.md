@@ -53,6 +53,7 @@ The cURL plugin wraps [libcurl](https://curl.se/) to give 4D methods direct acce
 - **`DEBUG` writes plaintext log files to disk** — full request/response headers, body data, and (if TLS is in use) the raw SSL record data, split into separate files per libcurl's own `CURLINFO_*` categories (`CURLINFO_TEXT.log`, `CURLINFO_HEADER_IN.log`, `CURLINFO_HEADER_OUT.log`, `CURLINFO_DATA_IN.log`, `CURLINFO_DATA_OUT.log`, `CURLINFO_SSL_DATA_IN.log`, `CURLINFO_SSL_DATA_OUT.log`). These can contain credentials, cookies, and auth headers in cleartext — treat the debug folder as sensitive and don't leave it turned on in production.
 - **A 0-byte file passed via `READDATA`/`WRITEDATA` is indistinguishable from "no file"** in the current implementation — if the file that exists on disk happens to be genuinely empty, the plugin falls back to sending the in-memory `Blob` parameter instead of the (empty) file. This only matters if you're uploading/expecting a literal 0-byte file; anything with real content is unaffected.
 - Every command in `manifest.json` is declared `threadSafe`, and each call gets its own libcurl "easy" handle (`curl_easy_init()` per call, not a shared one) — safe to call concurrently from multiple processes.
+- **On Windows, hostnames are resolved with the OS resolver.** The Windows build links libcurl against c-ares, which does its own DNS and never asks the Windows DNS Client service — so it ignores NRPT rules, VPN split-DNS and DoH policy, and on some machines cannot find a usable nameserver at all, failing with libcurl error 6 (`CURLE_COULDNT_RESOLVE_HOST`) while every other program on the machine resolves names fine. To avoid that, the plugin resolves the URL's host itself via `getaddrinfo()` and seeds the answer into libcurl's DNS cache before the transfer starts. This happens only when you have not set `RESOLVE` yourself and are not going through a proxy (`PROXY`, `PRE_PROXY`, `AUTOPROXY`), and if the OS resolver fails nothing is seeded and libcurl behaves exactly as before. macOS is unaffected. One consequence: the lookup is synchronous and happens before the transfer, so `CONNECTTIMEOUT` does not bound it — a dead DNS server blocks for the OS resolver's own timeout.
 
 ---
 
@@ -312,6 +313,8 @@ If you pass a Text value the plugin doesn't recognize, the option is silently le
 ### Array options (Collection of Text)
 
 `CONNECT_TO`, `PROXYHEADER`, `HTTPHEADER`, `HTTP200ALIASES`, `RESOLVE`, `MAIL_RCPT`, `PREQUOTE`, `POSTQUOTE`, `QUOTE`, `TELNETOPTIONS` — each takes a Collection where every element is a Text line, mapped to libcurl's `curl_slist`-based options. Empty-string elements are skipped.
+
+> Setting `RESOLVE` on Windows also turns off the automatic host pre-resolution described in [Requirements](#requirements--platform-notes) — your entries are used as-is.
 
 ```4d
 $options.HTTPHEADER:=New collection:C1472("Authorization: Bearer "+$token; "Accept: application/json")

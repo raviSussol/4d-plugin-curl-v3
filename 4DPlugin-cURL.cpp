@@ -1018,7 +1018,7 @@ static void curl_easy_setopt_enum(CURL *curl, CURLoption option, CUTF8String& s)
     curl_easy_setopt(curl, option, v);
 }
 
-static void curl_easy_setopt_array(CURL *curl, CURLoption option, PA_CollectionRef col, struct curl_slist **list) {
+static void curl_slist_append_array(PA_CollectionRef col, struct curl_slist **list) {
     
     if((col) && (list)) {
         
@@ -1034,6 +1034,15 @@ static void curl_easy_setopt_array(CURL *curl, CURLoption option, PA_CollectionR
                 }
             }
         }
+    }
+}
+
+static void curl_easy_setopt_array(CURL *curl, CURLoption option, PA_CollectionRef col, struct curl_slist **list) {
+    
+    if((col) && (list)) {
+        
+        curl_slist_append_array(col, list);
+        
         if(*list)
             curl_easy_setopt(curl, option, *list);
     }
@@ -1052,6 +1061,94 @@ static void curl_easy_setopt_path(CURL *curl, CURLoption option, CUTF8String& st
     curl_easy_setopt(curl, option, stringValue.c_str());
 #endif
 }
+
+#if !VERSIONMAC
+/* Resolve the URL's host with the OS resolver and pre-seed libcurl's DNS cache.
+
+   The Windows build links libcurl against c-ares, which does its own DNS and
+   never consults the Windows DNS Client service. It therefore ignores NRPT
+   rules, VPN split-DNS and DoH policy, and on a machine where it cannot work
+   out a usable nameserver of its own it fails to resolve anything at all,
+   while every other program on the same machine resolves names fine.
+
+   Seeding CURLOPT_RESOLVE puts the answer in libcurl's DNS cache before the
+   transfer starts, so c-ares is never consulted and the plugin resolves names
+   the same way the rest of the OS does.
+
+   Nothing is added when the host is already an IP literal or when the OS
+   resolver fails, so the worst case is exactly the behaviour without this. */
+static void curl_preresolve_host(const std::string& url,
+                                 long port_override,
+                                 struct curl_slist **resolve_list)
+{
+    if(!resolve_list) return;
+    
+    CURLU *h = curl_url();
+    if(!h) return;
+    
+    char *host = NULL, *port = NULL;
+    std::string entry;
+    
+    if((CURLUE_OK == curl_url_set(h, CURLUPART_URL, url.c_str(), 0))
+       && (CURLUE_OK == curl_url_get(h, CURLUPART_HOST, &host, 0))
+       && (CURLUE_OK == curl_url_get(h, CURLUPART_PORT, &port, CURLU_DEFAULT_PORT)))
+    {
+        struct in6_addr dummy;
+        
+        /* an IP literal needs no resolving */
+        if((1 != inet_pton(AF_INET, host, &dummy))
+           && (1 != inet_pton(AF_INET6, host, &dummy)))
+        {
+            /* CURLOPT_RESOLVE entries are port specific, and CURLOPT_PORT
+               overrides the port in the URL, so it has to win here too */
+            char port_buf[16] = {0};
+            if(port_override > 0)
+                snprintf(port_buf, sizeof(port_buf), "%ld", port_override);
+            
+            const char *entry_port = (port_override > 0) ? port_buf : port;
+            
+            struct addrinfo hints;
+            memset(&hints, 0, sizeof(hints));
+            hints.ai_family = AF_UNSPEC;
+            hints.ai_socktype = SOCK_STREAM;
+            
+            struct addrinfo *res = NULL;
+            
+            if(0 == getaddrinfo(host, entry_port, &hints, &res))
+            {
+                std::string addresses;
+                
+                for(struct addrinfo *ai = res; ai; ai = ai->ai_next)
+                {
+                    char buf[NI_MAXHOST] = {0};
+                    if(0 == getnameinfo(ai->ai_addr, (socklen_t)ai->ai_addrlen,
+                                        buf, sizeof(buf), NULL, 0, NI_NUMERICHOST))
+                    {
+                        if(addresses.length())
+                            addresses += ",";
+                        addresses += buf;
+                    }
+                }
+                
+                if(addresses.length())
+                {
+                    /* host:port:address[,address] - libcurl 7.59+ for the list */
+                    entry = std::string(host) + ":" + entry_port + ":" + addresses;
+                }
+                
+                freeaddrinfo(res);
+            }
+        }
+    }
+    
+    if(host) curl_free(host);
+    if(port) curl_free(port);
+    curl_url_cleanup(h);
+    
+    if(entry.length())
+        *resolve_list = curl_slist_append(*resolve_list, entry.c_str());
+}
+#endif
 
 static bool curl_set_options(CURL *curl,
                              PA_ObjectRef Param1,
@@ -1902,11 +1999,11 @@ static bool curl_set_options(CURL *curl,
             }
 //        }
         
-//        if(curl_slist_resolve) {
+            /* applied at the end of this function, after curl_preresolve_host()
+               has had its chance to add to the same list */
             if(ob_is_defined(Param1, L"RESOLVE")) {
-                curl_easy_setopt_array(curl, CURLOPT_RESOLVE, ob_get_c(Param1, L"RESOLVE"), curl_slist_resolve);
+                curl_slist_append_array(ob_get_c(Param1, L"RESOLVE"), curl_slist_resolve);
             }
-//        }
 
 //        if(curl_slist_mail_rcpt) {
             if(ob_is_defined(Param1, L"MAIL_RCPT")) {
@@ -1937,6 +2034,26 @@ static bool curl_set_options(CURL *curl,
                 curl_easy_setopt_array(curl, CURLOPT_TELNETOPTIONS, ob_get_c(Param1, L"TELNETOPTIONS"), curl_slist_telnet_options);
             }
 //        }
+
+#if !VERSIONMAC
+        /* Only when the caller has not pre-resolved this themselves, and only
+           for a direct connection: with a proxy it is the proxy's name that
+           gets resolved, not the one in the URL. */
+        if((curl_slist_resolve)
+           && (!ob_is_defined(Param1, L"RESOLVE"))
+           && (!ob_is_defined(Param1, L"PROXY"))
+           && (!ob_is_defined(Param1, L"PRE_PROXY"))
+           && (!ob_is_defined(Param1, L"AUTOPROXY"))
+           && (url.length()))
+        {
+            curl_preresolve_host(std::string((const char *)url.c_str(), url.length()),
+                                 ob_is_defined(Param1, L"PORT") ? (long)ob_get_n(Param1, L"PORT") : 0,
+                                 curl_slist_resolve);
+        }
+#endif
+        
+        if((curl_slist_resolve) && (*curl_slist_resolve))
+            curl_easy_setopt(curl, CURLOPT_RESOLVE, *curl_slist_resolve);
     }
     return isAtomic;
 }
