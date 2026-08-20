@@ -1,0 +1,179 @@
+# THROWAWAY: build-only CI for testing changes on a fork.
+#
+# Builds both platforms with no secrets and no signing/notarization, and
+# uploads the two binaries plus an assembled bundle as artifacts. This exists
+# so changes can be compiled for Windows without a Windows machine.
+#
+# Delete this file before opening a PR against miyako/4d-plugin-curl-v3.
+
+name: CI build
+
+on:
+  push:
+    branches:
+      - rebuild-windows-deps
+  workflow_dispatch:
+
+concurrency:
+  group: ci-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_NAME: cURL
+  XCODE_PROJECT: cURL.xcodeproj
+  VCX_SOLUTION: cURL.sln
+  MACOS_DEPLOYMENT_TARGET: '10.13'
+
+jobs:
+
+  windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # Same overrides release.yml uses: windows-latest has the v143 toolset
+      # but not the v140 the project is pinned to, and no Windows 8.1 SDK.
+      - name: build x64
+        shell: cmd
+        run: msbuild "${{ env.VCX_SOLUTION }}" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
+
+      # Informational. RuntimeLibrary is /MT, but the link line lists both
+      # msvcrt.lib and libcmt.lib with msvcrt.lib first, which is why the
+      # "static" .4DX imports VCRUNTIME140.dll and the UCRT forwarders. Print
+      # it so a change to that ordering can be seen to have worked.
+      - name: report the .4DX imports
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          dumpbin /nologo /dependents "test\Plugins\${{ env.PRODUCT_NAME }}.bundle\Contents\Windows64\${{ env.PRODUCT_NAME }}.4DX"
+
+      # Acceptance probe: the same source the vcpkg-deps workflow gates its
+      # artifact on, compiled here against the committed lib\64 rather than a
+      # fresh vcpkg tree. See .github/probe/curl-probe.c.
+      #
+      # Run against the pre-rebuild libraries this fails exactly two checks -
+      # the two c-ares ones - and passes everything else. That is the
+      # before/after discriminator working, not a broken workflow.
+      #
+      # cares.lib is linked only while it still exists: before the rebuild
+      # libcurl.lib refers to c-ares symbols, so leaving it out would fail at
+      # link time and prove nothing.
+      - name: build and run the acceptance probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set ARES_LIB=
+          if exist "lib\64\cares.lib" set ARES_LIB=cares.lib
+          if defined ARES_LIB (echo NOTE: lib\64 still contains cares.lib - expect the two c-ares checks to fail) else (echo NOTE: no cares.lib in lib\64)
+          cl /nologo /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DCURL_STATICLIB /DNGHTTP2_STATICLIB /I include ^
+            .github\probe\curl-probe.c /Fe:probe.exe ^
+            /link /LIBPATH:lib\64 ^
+            libcurl.lib libssh2.lib libssl.lib libcrypto.lib %ARES_LIB% ^
+            nghttp2.lib nghttp3.lib ngtcp2.lib ngtcp2_crypto_ossl.lib ^
+            brotlicommon.lib brotlidec.lib brotlienc.lib zstd.lib zlib.lib ^
+            iconv.lib charset.lib idn2.lib unistring.lib ^
+            libproxy.lib modman.lib ^
+            Secur32.lib Wldap32.lib Crypt32.lib ws2_32.lib ^
+            legacy_stdio_definitions.lib kernel32.lib user32.lib gdi32.lib ^
+            winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib ^
+            oleaut32.lib uuid.lib odbc32.lib odbccp32.lib || exit /b 1
+          probe.exe || exit /b 1
+
+      - name: upload .4DX
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-4DX
+          path: test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          if-no-files-found: error
+
+  bundle:
+    name: Assemble cURL.bundle (unsigned)
+    needs: [windows, macos]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download the Windows .4DX
+        uses: actions/download-artifact@v4
+        with:
+          name: cURL-4DX
+          path: win
+
+      - name: download the macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cURL-macos
+          path: mac
+
+      - name: assemble the bundle
+        run: |
+          set -euo pipefail
+          BUNDLE="test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
+
+          # The checked-in bundle still carries the upstream release signature.
+          # This build is unsigned, and a stale _CodeSignature would make macOS
+          # read it as a signed bundle that has been tampered with - worse than
+          # no signature at all.
+          rm -rf "$BUNDLE/Contents/_CodeSignature"
+
+          mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Windows64"
+          cp "mac/${{ env.PRODUCT_NAME }}" "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          cp "win/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          chmod +x "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+
+          # manifest.json and constants.xlf normally reach Contents/Resources
+          # only through the Xcode CopyFiles phase, which did not run in this
+          # job - refresh them here so the bundle cannot ship stale ones.
+          cp manifest.json constants.xlf "$BUNDLE/Contents/Resources/"
+
+          test -f "$BUNDLE/Contents/Info.plist"
+          test -f "$BUNDLE/Contents/Resources/manifest.json"
+          lipo -info "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          file "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          echo "--- bundle contents ---"
+          find "$BUNDLE" -type f | sort
+
+          # zip on macOS so permissions survive the artifact round trip
+          ditto -c -k --keepParent "$BUNDLE" "${{ env.PRODUCT_NAME }}-bundle-${GITHUB_SHA:0:7}.zip"
+
+      - name: upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-bundle
+          path: ${{ env.PRODUCT_NAME }}-bundle-*.zip
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS (universal, unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build macOS plugin (universal)
+        run: |
+          xcodebuild -project "${{ env.XCODE_PROJECT }}" \
+            -target "${{ env.PRODUCT_NAME }}" \
+            -configuration Default \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MACOSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: verify universal binary
+        run: |
+          set -euo pipefail
+          BIN="test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q "arm64" && lipo -info "$BIN" | grep -q "x86_64"
+
+      - name: upload macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-macos
+          path: test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}
+          if-no-files-found: error
