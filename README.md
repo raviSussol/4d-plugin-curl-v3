@@ -1,3 +1,9 @@
+> **This is a fork of [`miyako/4d-plugin-curl-v3`](https://github.com/miyako/4d-plugin-curl-v3).** The
+> Windows x64 dependencies are rebuilt — libcurl 8.21.0, OpenSSL 3.6.3, and c-ares removed so Windows
+> resolves DNS through the OS resolver. macOS is untouched and no plugin behaviour changes.
+> **[FORK.md](FORK.md)** is the full list of what differs and why, including four options that no longer
+> do anything on Windows.
+
 ![version](https://img.shields.io/badge/version-19%2B-5682DF)
 ![platform](https://img.shields.io/static/v1?label=platform&message=mac-intel%20|%20mac-arm%20|%20win-64&color=blue)
 [![license](https://img.shields.io/github/license/miyako/4d-plugin-curl-v3)](LICENSE)
