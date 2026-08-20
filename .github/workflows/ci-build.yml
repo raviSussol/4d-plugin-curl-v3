@@ -152,6 +152,63 @@ jobs:
           path: test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
           if-no-files-found: error
 
+  bundle:
+    name: Assemble cURL.bundle (unsigned)
+    needs: [windows, macos]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download the Windows .4DX
+        uses: actions/download-artifact@v4
+        with:
+          name: cURL-4DX
+          path: win
+
+      - name: download the macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cURL-macos
+          path: mac
+
+      - name: assemble the bundle
+        run: |
+          set -euo pipefail
+          BUNDLE="test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
+
+          # The checked-in bundle still carries the upstream release signature.
+          # This build is unsigned, and a stale _CodeSignature would make macOS
+          # read it as a signed bundle that has been tampered with - worse than
+          # no signature at all.
+          rm -rf "$BUNDLE/Contents/_CodeSignature"
+
+          mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Windows64"
+          cp "mac/${{ env.PRODUCT_NAME }}" "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          cp "win/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          chmod +x "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+
+          # manifest.json and constants.xlf normally reach Contents/Resources
+          # only through the Xcode CopyFiles phase, which did not run in this
+          # job - refresh them here so the bundle cannot ship stale ones.
+          cp manifest.json constants.xlf "$BUNDLE/Contents/Resources/"
+
+          test -f "$BUNDLE/Contents/Info.plist"
+          test -f "$BUNDLE/Contents/Resources/manifest.json"
+          lipo -info "$BUNDLE/Contents/MacOS/${{ env.PRODUCT_NAME }}"
+          file "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          echo "--- bundle contents ---"
+          find "$BUNDLE" -type f | sort
+
+          # zip on macOS so permissions survive the artifact round trip
+          ditto -c -k --keepParent "$BUNDLE" "${{ env.PRODUCT_NAME }}-bundle-${GITHUB_SHA:0:7}.zip"
+
+      - name: upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cURL-bundle
+          path: ${{ env.PRODUCT_NAME }}-bundle-*.zip
+          if-no-files-found: error
+
   macos:
     name: Build macOS (universal, unsigned)
     runs-on: macos-latest
