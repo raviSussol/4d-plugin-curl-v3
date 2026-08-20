@@ -1,17 +1,25 @@
-# THROWAWAY: build-only CI for testing changes on a fork.
+# Build-only CI for this fork. Builds both platforms with no secrets and no
+# signing/notarization, and uploads the two binaries plus an assembled bundle
+# as artifacts, so changes can be compiled for Windows without a Windows
+# machine.
 #
-# Builds both platforms with no secrets and no signing/notarization, and
-# uploads the two binaries plus an assembled bundle as artifacts. This exists
-# so changes can be compiled for Windows without a Windows machine.
+# This is also where the parity guarantees in FORK.md are enforced: every run
+# compiles and runs .github/probe/curl-probe.c against the committed lib\64 and
+# fails the build if the feature bitmask, the protocol list, or the absence of
+# c-ares has moved. A red run means do not ship the artifact.
 #
-# Delete this file before opening a PR against miyako/4d-plugin-curl-v3.
+# The branch filter below must track the name of the fork branch. If they ever
+# disagree nothing errors - the build and the probe just silently stop running.
+#
+# Not for upstream: delete this file from any PR against
+# miyako/4d-plugin-curl-v3.
 
 name: CI build
 
 on:
   push:
     branches:
-      - rebuild-windows-deps
+      - msupply
   workflow_dispatch:
 
 concurrency:
