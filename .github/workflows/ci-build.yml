@@ -41,6 +41,110 @@ jobs:
         shell: cmd
         run: msbuild "${{ env.VCX_SOLUTION }}" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /m
 
+      # TEMPORARY, delete with this workflow: proves the Windows-only
+      # pre-resolve helper actually works on Windows rather than merely
+      # compiling. The helper is lifted out of the real source so this cannot
+      # drift from the implementation it is testing.
+      - name: generate the pre-resolve probe
+        shell: python
+        run: |
+          src = open("4DPlugin-cURL.cpp", "rb").read().replace(b"\r\n", b"\n").decode("utf-8")
+          start = src.index("static void curl_preresolve_host(")
+          end = src.index("\n}\n", src.index("*resolve_list = curl_slist_append", start)) + 3
+          helper = src[start:end]
+          print("lifted %d lines of helper" % helper.count("\n"))
+
+          probe = r"""
+          #include <winsock2.h>
+          #include <ws2tcpip.h>
+          #include <curl/curl.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <string>
+
+          __HELPER__
+
+          static int failures = 0;
+
+          static void expect(const char *what, bool ok, const std::string& detail) {
+              printf("%-46s %s  %s\n", what, ok ? "PASS" : "FAIL", detail.c_str());
+              if(!ok) failures++;
+          }
+
+          static std::string entry_for(const char *url, long port_override) {
+              struct curl_slist *list = NULL;
+              curl_preresolve_host(std::string(url), port_override, &list);
+              std::string out;
+              for(struct curl_slist *p = list; p; p = p->next) {
+                  if(out.length()) out += " | ";
+                  out += p->data;
+              }
+              if(list) curl_slist_free_all(list);
+              return out;
+          }
+
+          static bool starts_with(const std::string& s, const char *prefix) {
+              return s.compare(0, strlen(prefix), prefix) == 0;
+          }
+
+          /* CURLE_COULDNT_RESOLVE_HOST means the name was never in the cache */
+          static CURLcode probe_transfer(const char *entry) {
+              CURL *c = curl_easy_init();
+              struct curl_slist *l = entry ? curl_slist_append(NULL, entry) : NULL;
+              curl_easy_setopt(c, CURLOPT_URL, "http://test.invalid/");
+              curl_easy_setopt(c, CURLOPT_PORT, 9L);
+              curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
+              if(l) curl_easy_setopt(c, CURLOPT_RESOLVE, l);
+              CURLcode r = curl_easy_perform(c);
+              if(l) curl_slist_free_all(l);
+              curl_easy_cleanup(c);
+              return r;
+          }
+
+          int main(void) {
+              /* exactly what the plugin does in OnStartup(); getaddrinfo() needs
+                 the WSAStartup() this performs */
+              curl_global_init(CURL_GLOBAL_DEFAULT);
+              printf("%s\n\n", curl_version());
+
+              std::string sftp = entry_for("sftp://localhost/some/path", 0);
+              expect("sftp:// gets default port 22", starts_with(sftp, "localhost:22:") && sftp.length() > 13, sftp);
+              std::string https = entry_for("https://localhost", 0);
+              expect("https:// gets default port 443", starts_with(https, "localhost:443:"), https);
+              std::string explicitport = entry_for("sftp://localhost:2222/x", 0);
+              expect("explicit port in URL is kept", starts_with(explicitport, "localhost:2222:"), explicitport);
+              std::string override = entry_for("sftp://localhost/x", 2200);
+              expect("PORT option overrides the URL port", starts_with(override, "localhost:2200:"), override);
+              std::string creds = entry_for("sftp://user:pw@localhost/x", 0);
+              expect("credentials are stripped from the host", starts_with(creds, "localhost:22:"), creds);
+              expect("IPv4 literal is skipped", entry_for("http://127.0.0.1/x", 0).empty(), "");
+              expect("IPv6 literal is skipped", entry_for("http://[::1]/x", 0).empty(), "");
+              expect("unresolvable host adds nothing", entry_for("sftp://no-such-host.invalid/x", 0).empty(), "");
+              expect("garbage URL adds nothing", entry_for("not a url at all", 0).empty(), "");
+
+              /* the mechanism itself: without a seeded entry the name cannot be
+                 resolved, with one the transfer gets past DNS to the connect */
+              CURLcode bare = probe_transfer(NULL);
+              expect("unseeded bogus host fails to resolve", bare == CURLE_COULDNT_RESOLVE_HOST, curl_easy_strerror(bare));
+              CURLcode seeded = probe_transfer("test.invalid:9:127.0.0.1");
+              expect("seeded host gets past DNS", seeded != CURLE_COULDNT_RESOLVE_HOST, curl_easy_strerror(seeded));
+
+              curl_global_cleanup();
+              printf("\n%s\n", failures ? "PROBE FAILED" : "probe ok");
+              return failures ? 1 : 0;
+          }
+          """
+          import textwrap
+          probe = textwrap.dedent(probe).replace("__HELPER__", helper)
+          open("probe.cpp", "w", encoding="utf-8").write(probe)
+
+      - name: compile & run the pre-resolve probe
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /EHsc /MT /std:c++17 /DCURL_STATICLIB /DNGHTTP2_STATICLIB /I include probe.cpp /Fe:probe.exe /link /LIBPATH:lib\64 Secur32.lib ngtcp2_crypto_ossl.lib ngtcp2.lib nghttp3.lib brotlicommon.lib brotlidec.lib brotlienc.lib cares.lib charset.lib iconv.lib idn2.lib libcrypto.lib libcurl.lib libssh2.lib libssl.lib nghttp2.lib unistring.lib zlib.lib zstd.lib Wldap32.lib Crypt32.lib ws2_32.lib legacy_stdio_definitions.lib modman.lib libproxy.lib advapi32.lib user32.lib || exit /b 1
+          probe.exe || exit /b 1
+
       - name: upload .4DX
         uses: actions/upload-artifact@v4
         with:
