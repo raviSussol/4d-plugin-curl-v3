@@ -55,9 +55,10 @@ jobs:
       # artifact on, compiled here against the committed lib\64 rather than a
       # fresh vcpkg tree. See .github/probe/curl-probe.c.
       #
-      # Run against the pre-rebuild libraries this fails exactly the three
-      # c-ares checks and passes the other seven. That is the before/after
-      # discriminator working, not a broken workflow.
+      # Run against the pre-rebuild libraries this fails the three c-ares
+      # checks, and the protocol check too since mqtts is expected and curl
+      # 8.18 had no MQTT over TLS. That is the before/after discriminator
+      # working, not a broken workflow.
       #
       # cares.lib is linked only while it still exists: before the rebuild
       # libcurl.lib refers to c-ares symbols, so leaving it out would fail at
@@ -68,16 +69,17 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           set ARES_LIB=
           if exist "lib\64\cares.lib" set ARES_LIB=cares.lib
-          if defined ARES_LIB (echo NOTE: lib\64 still contains cares.lib - expect the two c-ares checks to fail) else (echo NOTE: no cares.lib in lib\64)
+          if defined ARES_LIB (echo NOTE: lib\64 still contains cares.lib - expect the three c-ares checks to fail) else (echo NOTE: no cares.lib in lib\64)
           cl /nologo /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DCURL_STATICLIB /DNGHTTP2_STATICLIB /I include ^
             .github\probe\curl-probe.c /Fe:probe.exe ^
             /link /LIBPATH:lib\64 ^
             libcurl.lib libssh2.lib libssl.lib libcrypto.lib %ARES_LIB% ^
-            nghttp2.lib nghttp3.lib ngtcp2.lib ngtcp2_crypto_ossl.lib ^
-            brotlicommon.lib brotlidec.lib brotlienc.lib zstd.lib zlib.lib ^
+            nghttp2.lib nghttp3.lib ngtcp2.lib ngtcp2_crypto_ossl.lib sfparse.lib ^
+            brotlicommon.lib brotlidec.lib brotlienc.lib zstd.lib zs.lib ^
             iconv.lib charset.lib idn2.lib unistring.lib ^
             libproxy.lib modman.lib ^
             Secur32.lib Wldap32.lib Crypt32.lib ws2_32.lib ^
+            bcrypt.lib iphlpapi.lib ^
             legacy_stdio_definitions.lib kernel32.lib user32.lib gdi32.lib ^
             winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib ^
             oleaut32.lib uuid.lib odbc32.lib odbccp32.lib || exit /b 1
