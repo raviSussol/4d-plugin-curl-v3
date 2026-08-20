@@ -1093,11 +1093,23 @@ static void curl_preresolve_host(const std::string& url,
        && (CURLUE_OK == curl_url_get(h, CURLUPART_HOST, &host, 0))
        && (CURLUE_OK == curl_url_get(h, CURLUPART_PORT, &port, CURLU_DEFAULT_PORT)))
     {
+        /* libcurl 8.18 hands back an IPv6 literal still wrapped in its
+           brackets where newer versions hand back the bare address, so
+           normalise before anything looks at it */
+        std::string hostname(host);
+        
+        if((hostname.length() > 2)
+           && ('[' == hostname.front())
+           && (']' == hostname.back()))
+        {
+            hostname = hostname.substr(1, hostname.length() - 2);
+        }
+        
         struct in6_addr dummy;
         
         /* an IP literal needs no resolving */
-        if((1 != inet_pton(AF_INET, host, &dummy))
-           && (1 != inet_pton(AF_INET6, host, &dummy)))
+        if((1 != inet_pton(AF_INET, hostname.c_str(), &dummy))
+           && (1 != inet_pton(AF_INET6, hostname.c_str(), &dummy)))
         {
             /* CURLOPT_RESOLVE entries are port specific, and CURLOPT_PORT
                overrides the port in the URL, so it has to win here too */
@@ -1114,7 +1126,7 @@ static void curl_preresolve_host(const std::string& url,
             
             struct addrinfo *res = NULL;
             
-            if(0 == getaddrinfo(host, entry_port, &hints, &res))
+            if(0 == getaddrinfo(hostname.c_str(), entry_port, &hints, &res))
             {
                 std::string addresses;
                 
@@ -1133,7 +1145,7 @@ static void curl_preresolve_host(const std::string& url,
                 if(addresses.length())
                 {
                     /* host:port:address[,address] - libcurl 7.59+ for the list */
-                    entry = std::string(host) + ":" + entry_port + ":" + addresses;
+                    entry = hostname + ":" + entry_port + ":" + addresses;
                 }
                 
                 freeaddrinfo(res);

@@ -117,10 +117,10 @@ jobs:
               expect("PORT option overrides the URL port", starts_with(override, "localhost:2200:"), override);
               std::string creds = entry_for("sftp://user:pw@localhost/x", 0);
               expect("credentials are stripped from the host", starts_with(creds, "localhost:22:"), creds);
-              expect("IPv4 literal is skipped", entry_for("http://127.0.0.1/x", 0).empty(), "");
-              expect("IPv6 literal is skipped", entry_for("http://[::1]/x", 0).empty(), "");
-              expect("unresolvable host adds nothing", entry_for("sftp://no-such-host.invalid/x", 0).empty(), "");
-              expect("garbage URL adds nothing", entry_for("not a url at all", 0).empty(), "");
+              expect("IPv4 literal is skipped", entry_for("http://127.0.0.1/x", 0).empty(), entry_for("http://127.0.0.1/x", 0));
+              expect("IPv6 literal is skipped", entry_for("http://[::1]/x", 0).empty(), entry_for("http://[::1]/x", 0));
+              expect("unresolvable host adds nothing", entry_for("sftp://no-such-host.invalid/x", 0).empty(), entry_for("sftp://no-such-host.invalid/x", 0));
+              expect("garbage URL adds nothing", entry_for("not a url at all", 0).empty(), entry_for("not a url at all", 0));
 
               /* the mechanism itself: without a seeded entry the name cannot be
                  resolved, with one the transfer gets past DNS to the connect */
