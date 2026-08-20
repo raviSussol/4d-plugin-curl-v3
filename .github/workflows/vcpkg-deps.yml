@@ -176,11 +176,15 @@ jobs:
       # c-ares against the libraries we just built, before anyone commits them.
       #
       # The system libraries here deliberately mirror the vcxproj's Release|x64
-      # link line exactly, so that a newly required one (OpenSSL picking up a
-      # dependency on bcrypt, say) fails here and in the msbuild step together
-      # rather than passing one and breaking the other. libproxy and modman are
-      # the one difference: they are not staged, and the probe calls nothing in
-      # them, so the linker never needs them.
+      # link line, so that a newly required one fails here and in the msbuild
+      # step together rather than passing one and breaking the other. That has
+      # already paid for itself: curl 8.21 needs bcrypt.lib for
+      # BCryptGenRandom in Curl_win32_random and iphlpapi.lib for
+      # if_nametoindex in peer_create, neither of which 8.18 asked for. Both
+      # are added to the vcxproj in the same batch as the binaries.
+      #
+      # libproxy and modman are the deliberate difference: they are not staged,
+      # and the probe calls nothing in them, so the linker never needs them.
       - name: build and run the acceptance probe
         shell: cmd
         run: |
@@ -193,6 +197,7 @@ jobs:
             brotlicommon.lib brotlidec.lib brotlienc.lib zstd.lib zs.lib ^
             iconv.lib charset.lib idn2.lib unistring.lib ^
             Secur32.lib Wldap32.lib Crypt32.lib ws2_32.lib ^
+            bcrypt.lib iphlpapi.lib ^
             legacy_stdio_definitions.lib kernel32.lib user32.lib gdi32.lib ^
             winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib ^
             oleaut32.lib uuid.lib odbc32.lib odbccp32.lib || exit /b 1

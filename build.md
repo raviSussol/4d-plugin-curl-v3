@@ -66,6 +66,10 @@ library set rather than shipping a short one:
 * **`sfparse.lib` is new.** nghttp3 now builds its structured-field parser as a separate
   library, and `nghttp3.lib` refers to it.
 
+curl 8.21 also needs two Windows SDK libraries that 8.18 did not: **`bcrypt.lib`** for
+`BCryptGenRandom` in `Curl_win32_random`, and **`iphlpapi.lib`** for `if_nametoindex` in
+`peer_create`. Both are on the `Release|x64` link line.
+
 `libidn2.lib` is also present in `lib\64` but is on no link line; only `idn2.lib` is linked.
 `libcurl-d.lib` serves the unsupported Debug configuration and is stale.
 
