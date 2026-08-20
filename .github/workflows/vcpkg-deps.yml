@@ -90,7 +90,7 @@ jobs:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-archives
         run: |
           if not exist "%VCPKG_DEFAULT_BINARY_CACHE%" mkdir "%VCPKG_DEFAULT_BINARY_CACHE%"
-          vcpkg-src\vcpkg.exe install --triplet %TRIPLET% --x-install-root=vcpkg_installed --clean-after-build || exit /b 1
+          vcpkg-src\vcpkg.exe install --triplet %TRIPLET% --overlay-triplets=triplets --x-install-root=vcpkg_installed --clean-after-build || exit /b 1
 
       # Immediately, and regardless of what happens after this point.
       - name: save the vcpkg binary cache

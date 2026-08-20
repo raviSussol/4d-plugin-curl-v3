@@ -9,9 +9,10 @@
  *   vcpkg-deps.yml  ->  vcpkg_installed\x64-windows-static\lib  (before commit)
  *   ci-build.yml    ->  lib\64                                  (after commit)
  *
- * Run against the pre-rebuild libraries it fails exactly the three c-ares
- * checks and passes the other seven. That is the point: it is a before/after
- * discriminator, not just a smoke test.
+ * Run against the pre-rebuild libraries it fails the three c-ares checks, and
+ * the protocol check too now that mqtts is expected - curl 8.18 had no MQTT
+ * over TLS. That is the point: it is a before/after discriminator, not just a
+ * smoke test.
  *
  * Build (see the workflows for the full library list):
  *   cl /nologo /MT /DCURL_STATICLIB /DNGHTTP2_STATICLIB /I include
@@ -31,16 +32,29 @@
  * resolver sets it too. curl 8.21.0 defines no feature bits that 8.20.0 did
  * not, so there is no legitimate reason for the bitmask to change at all.
  *
+ * NTLM is in this value, and 8.21 makes NTLM opt-in - the overlay triplet in
+ * triplets/x64-windows-static.cmake is what puts it back. If this check fails
+ * on the NTLM bit, the triplet did not reach the build.
+ *
  * If one of these fails, the vcpkg feature list in vcpkg.json is wrong. Do not
  * update the constant to make the build pass without accounting for every
  * differing bit or protocol first.
  */
 #define EXPECTED_FEATURES 1605193629 /* 0x5fad4f9d */
 
+/*
+ * The 24 protocols the shipping build reported, plus mqtts.
+ *
+ * mqtts is the one deliberate difference from the baseline: MQTT over TLS is
+ * new in curl 8.21 and 8.18 could not offer it, so it appears purely from the
+ * version bump. Everything else must match, smb and smbs included - 8.21 also
+ * made SMB opt-in, and the overlay triplet turns it back on.
+ */
 static const char *const EXPECTED_PROTOCOLS[] = {
     "dict", "file", "ftp", "ftps", "gopher", "gophers", "http", "https",
-    "imap", "imaps", "ldap", "ldaps", "mqtt", "pop3", "pop3s", "rtsp",
-    "scp", "sftp", "smb", "smbs", "smtp", "smtps", "telnet", "tftp", NULL
+    "imap", "imaps", "ldap", "ldaps", "mqtt", "mqtts", "pop3", "pop3s",
+    "rtsp", "scp", "sftp", "smb", "smbs", "smtp", "smtps", "telnet",
+    "tftp", NULL
 };
 
 static const struct { int bit; const char *name; } FEATURE_BITS[] = {

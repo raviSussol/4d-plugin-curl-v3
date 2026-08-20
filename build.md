@@ -15,12 +15,14 @@ The dependency set is pinned by [`vcpkg.json`](vcpkg.json), so a refresh is a ba
 manual job on one machine. With a vcpkg checkout at the baseline commit:
 
 ```cmd
-vcpkg install --triplet x64-windows-static
+vcpkg install --triplet x64-windows-static --overlay-triplets=triplets
 ```
 
 Run from the repository root; vcpkg picks up `vcpkg.json` in manifest mode. The libraries land in
 `vcpkg_installed\x64-windows-static\lib` and are copied into `lib\64` by hand, in a commit containing
 nothing but binaries.
+
+`--overlay-triplets` is not optional - see [NTLM and SMB](#ntlm-and-smb).
 
 `.github/workflows/vcpkg-deps.yml` does exactly this on a `windows-latest` runner and uploads the result
 as an artifact. It is `workflow_dispatch` only — the build takes tens of minutes on a cold cache, and it
@@ -109,6 +111,26 @@ not doing what their names suggest anyway. The list in `vcpkg.json` was derived 
   `dict` through `tftp`.
 * **`sspi`** covers SSPI, SPNEGO and Kerberos 5; `GSSAPI` is clear, so Kerberos comes via Windows SSPI.
 
+### NTLM and SMB
+
+curl 8.21 turned both from opt-out into opt-in. 8.18 had `option(CURL_DISABLE_NTLM ... OFF)`;
+8.21 has `option(CURL_ENABLE_NTLM ... OFF)`, and the same flip for SMB. Nothing in vcpkg's
+curl port sets either, so a straight rebuild silently dropped **NTLM, `smb` and `smbs`** -
+the two protocols because curl gates them on the NTLM crypto core as well as on
+`CURL_ENABLE_SMB`.
+
+`triplets/x64-windows-static.cmake` sets both back on. It overrides vcpkg's builtin triplet
+of the same name and is identical to it apart from that, which is why the install needs
+`--overlay-triplets=triplets`.
+
+This was deliberate: the rebuild exists to move OpenSSL off a version with 27 CVEs and to
+drop c-ares, and reducing what the plugin can do is not part of that. Dropping NTLM is a
+decision to make on its own terms, not a side effect of a CVE fix. If it is ever made, the
+protocol list in `README.md` needs updating with it.
+
+The probe is what proves the triplet reached the build: it asserts NTLM is still in the
+feature bitmask and `smb`/`smbs` still in the protocol list.
+
 ### No c-ares
 
 c-ares was removed on purpose. On several Windows machines c-ares could not determine a usable nameserver
@@ -161,9 +183,10 @@ libraries are not vcpkg-built and this manifest cannot fix them.
 ## Parity reference
 
 `cURL_VersionInfo` from the build this set replaces (Windows x64, libcurl 8.18.0, OpenSSL 3.6.1, with
-c-ares). `protocols` and `features` must come back **identical** after a rebuild; anything else means the
-feature list is wrong. curl 8.21.0 defines no feature bits that 8.20.0 did not, so there is no legitimate
-reason for the bitmask to move.
+c-ares). `features` must come back **identical**, and `protocols` identical **apart from `mqtts`** -
+MQTT over TLS is new in 8.21 and 8.18 could not offer it. Anything else means the feature list is wrong.
+curl 8.21.0 defines no feature bits that 8.20.0 did not, so there is no legitimate reason for the bitmask
+to move.
 
 ```json
 {
@@ -188,5 +211,5 @@ TLSAUTH_SRP, HTTP2, KERBEROS5, UNIX_SOCKETS, HTTPS_PROXY, BROTLI, ALTSVC, HTTP3,
 THREADSAFE. Note what is *clear*: MULTI_SSL, PSL, GSASL and GSSAPI.
 
 Expected to change after the rebuild, and only these: `version` and `version_num` (8.21.0 / 529664),
-`ssl_version` (OpenSSL/3.6.3), `libz_version` (1.3.2), `nghttp2_version` (1.69.0), and `libssh_version`
-losing its `_DEV` suffix.
+`ssl_version` (OpenSSL/3.6.3), `libz_version` (1.3.2), `nghttp2_version` (1.69.0), `quic_version`
+(ngtcp2/1.25.0 nghttp3/1.18.0), `ares` becoming empty, and `mqtts` joining `protocols`.
