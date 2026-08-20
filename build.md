@@ -38,11 +38,11 @@ only needs to run when `vcpkg.json` changes.
 | nghttp2 / nghttp3 / ngtcp2 | 1.69.0 / 1.18.0 / 1.25.0 |
 | brotli / zstd / zlib | 1.2.0 / 1.5.7 / 1.3.2 |
 | libidn2 / libunistring / libiconv | 2.3.7 / 1.2 / 1.19 |
-| libproxy | 0.4.18 |
+| libproxy | not built - see below |
 
-### The nineteen libraries
+### The libraries
 
-`Release|x64` links these out of `lib\64`:
+`Release|x64` links these out of `lib\64`. Eighteen come from this manifest:
 
 | Library | vcpkg port |
 |---|---|
@@ -50,16 +50,41 @@ only needs to run when `vcpkg.json` changes.
 | `libcrypto.lib`, `libssl.lib` | `openssl` |
 | `libssh2.lib` | `libssh2` (curl `ssh`) |
 | `nghttp2.lib` | `nghttp2` (curl `http2`) |
-| `nghttp3.lib`, `ngtcp2.lib`, `ngtcp2_crypto_ossl.lib` | `nghttp3`, `ngtcp2[openssl]` (curl `http3`) |
+| `nghttp3.lib`, `ngtcp2.lib`, `ngtcp2_crypto_ossl.lib`, `sfparse.lib` | `nghttp3`, `ngtcp2[openssl]` (curl `http3`) |
 | `brotlicommon.lib`, `brotlidec.lib`, `brotlienc.lib` | `brotli` (curl `brotli`) |
 | `zstd.lib` | `zstd` (curl `zstd`) |
-| `zlib.lib` | `zlib` (curl, always) |
+| `zs.lib` | `zlib` (curl, always) |
 | `iconv.lib`, `charset.lib` | `libiconv` |
 | `idn2.lib` | `libidn2` (curl `idn2`) |
 | `unistring.lib` | `libunistring`, via `libidn2` |
-| `libproxy.lib`, `modman.lib` | `libproxy` |
+
+Two names moved in this rebuild, and both are why the CI job fails on an unexpected
+library set rather than shipping a short one:
+
+* **zlib installs as `zs.lib`**, not `zlib.lib`. The port renames the static output - its
+  pkgconfig rewrites `-lz` to `-lzs`. The old `zlib.lib` came from a port that did not.
+* **`sfparse.lib` is new.** nghttp3 now builds its structured-field parser as a separate
+  library, and `nghttp3.lib` refers to it.
 
 `libidn2.lib` is also present in `lib\64` but is on no link line; only `idn2.lib` is linked.
+`libcurl-d.lib` serves the unsupported Debug configuration and is stale.
+
+### libproxy is not built from this manifest
+
+`libproxy.lib` and `modman.lib` back the plugin's `AUTOPROXY` option. They are **not** in
+`vcpkg.json`, and `lib\64` keeps the pair it already had.
+
+The port is still libproxy 0.4.18, so this is not the 0.5.x rewrite - but it installs **no
+`modman.lib` at all**, and the `libproxy.lib` it does install is **64 KB against the 1.7 MB
+committed here**. A 26x drop reads like the module set, PAC script evaluation included, is
+no longer in the library. `AUTOPROXY` losing PAC support would be exactly the kind of silent
+capability regression this rebuild is otherwise guarding against, and libproxy has nothing
+to do with either of its goals - it carries no CVE here and no DNS behaviour. So it was left
+alone.
+
+If you do rebuild it: add `libproxy` to the manifest, expect no `modman.lib`, drop
+`modman.lib` from the vcxproj link line, and test `AUTOPROXY` against a PAC-based proxy
+before believing it.
 
 ### Why this feature list
 

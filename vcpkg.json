@@ -2,7 +2,7 @@
   "name": "4d-plugin-curl",
   "version-string": "0.0.0",
   "description": "Windows x64 dependency set for the 4D cURL plugin. Produces the static libraries committed to lib\\64.",
-  "$comment-libs": "libproxy and libiconv are not curl dependencies. The plugin includes proxy.h and iconv.h directly: libproxy backs the AUTOPROXY option, libiconv the FTP encoding conversion. libunistring reaches the link line only as a dependency of libidn2.",
+  "$comment-libs": "libiconv is not a curl dependency - the plugin includes iconv.h directly for the FTP encoding conversion. libunistring reaches the link line only as a dependency of libidn2. libproxy is deliberately NOT listed: the plugin uses it for AUTOPROXY, but the current port no longer installs modman.lib and emits a libproxy.lib 26x smaller than the one committed in lib\\64, so lib\\64 keeps its existing pair. See build.md.",
   "$comment-openssl": "The override is redundant at the baseline below, which already carries 3.6.3. It is kept as an explicit floor so a baseline bump cannot move OpenSSL without someone editing this line. OpenSSL 3.6 is end-of-life on 2026-11-01 - see build.md.",
   "builtin-baseline": "9e593bb18ea69cc5095e012465dcd675a822ed0d",
   "dependencies": [
@@ -23,8 +23,7 @@
         "zstd"
       ]
     },
-    "libiconv",
-    "libproxy"
+    "libiconv"
   ],
   "overrides": [
     {
