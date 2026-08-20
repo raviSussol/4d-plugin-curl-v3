@@ -2,14 +2,24 @@
 # as an artifact. The .lib files are then committed into lib\64 by hand, in a
 # commit containing nothing but binaries - see build.md.
 #
-# workflow_dispatch only. This is slow and rare: run it when vcpkg.json or its
-# baseline changes, not on every push. The plugin itself is built by
-# ci-build.yml, which links whatever is already committed in lib\64.
+# Slow and rare: it runs when vcpkg.json or its baseline changes, not on every
+# push. The plugin itself is built by ci-build.yml, which links whatever is
+# already committed in lib\64.
+#
+# workflow_dispatch is the intended trigger, but GitHub will only dispatch a
+# workflow whose file is on the default branch, so on a fork branch it 404s.
+# The path filter below is the same intent by a mechanism that works here: it
+# fires on a push that touches the manifest or this file, and nothing else.
+# Drop it once this lives on the default branch.
 
 name: vcpkg deps (Windows x64)
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'vcpkg.json'
+      - '.github/workflows/vcpkg-deps.yml'
 
 concurrency:
   group: vcpkg-deps-${{ github.ref }}

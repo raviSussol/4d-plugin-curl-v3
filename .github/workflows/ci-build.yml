@@ -55,9 +55,9 @@ jobs:
       # artifact on, compiled here against the committed lib\64 rather than a
       # fresh vcpkg tree. See .github/probe/curl-probe.c.
       #
-      # Run against the pre-rebuild libraries this fails exactly two checks -
-      # the two c-ares ones - and passes everything else. That is the
-      # before/after discriminator working, not a broken workflow.
+      # Run against the pre-rebuild libraries this fails exactly the three
+      # c-ares checks and passes the other seven. That is the before/after
+      # discriminator working, not a broken workflow.
       #
       # cares.lib is linked only while it still exists: before the rebuild
       # libcurl.lib refers to c-ares symbols, so leaving it out would fail at

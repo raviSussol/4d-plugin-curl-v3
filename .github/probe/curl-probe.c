@@ -9,8 +9,8 @@
  *   vcpkg-deps.yml  ->  vcpkg_installed\x64-windows-static\lib  (before commit)
  *   ci-build.yml    ->  lib\64                                  (after commit)
  *
- * Run against the pre-rebuild libraries it fails exactly two checks - the two
- * c-ares ones - and passes the rest. That is the point: it is a before/after
+ * Run against the pre-rebuild libraries it fails exactly the three c-ares
+ * checks and passes the other seven. That is the point: it is a before/after
  * discriminator, not just a smoke test.
  *
  * Build (see the workflows for the full library list):
